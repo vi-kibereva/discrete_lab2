@@ -10,6 +10,18 @@ class Client:
         self.port = port
         self.username = username
 
+        self.e, self.d, self.n = self.generate_keys()
+
+    def generate_keys(self):
+        primes = [i for i in range(1000, 5000) if sympy.isprime(i)]
+        p, q = random.sample(primes, 2)
+        n = p * q
+        phi = (p - 1) * (q - 1)
+        e = 3
+        while math.gcd(e, phi) != 1:
+            e += 2
+        d = pow(e, -1, phi)
+        return e, d, n
 
     def init_connection(self):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -21,42 +33,37 @@ class Client:
 
         self.s.send(self.username.encode())
 
-        primes = [i for i in range(1000, 5000) if sympy.isprime(i)]
-        p, q = random.sample(primes, 2)
-        self.n = p * q
-        phi = (p - 1) * (q - 1)
-        e = 3
-        while math.gcd(e, phi) != 1:
-            e += 2
-        self.e = e
-        self.secret = pow(e, -1, phi)
-
         data = self.s.recv(1024).decode()
         self.e_s, self.n_s = tuple(map(int, data.split()))
 
         self.s.send(f"{self.e} {self.n}".encode())
 
-        secret_s = int(self.s.recv(1024).decode())
-        self.secret_s = pow(secret_s, self.secret, self.n)
-
-        message_handler = threading.Thread(target=self.read_handler,args=())
+        message_handler = threading.Thread(target=self.read_handler, args=())
         message_handler.start()
-        input_handler = threading.Thread(target=self.write_handler,args=())
+        input_handler = threading.Thread(target=self.write_handler, args=())
         input_handler.start()
 
     def read_handler(self): 
         while True:
-            message = self.s.recv(1024).decode()
-            message = [int(ch) for ch in message.split()]
-            message = [chr(pow(c, self.secret, self.n)) for c in message]
-            print(''.join(message))
+            try:
+                message = self.s.recv(4096).decode()
+                if not message:
+                    break
+                decrypted = [chr(pow(int(c), self.d, self.n)) for c in message.split()]
+                print(''.join(decrypted))
+            except Exception as e:
+                print("[client]: Error reading message:", e)
+                break
 
     def write_handler(self):
         while True:
-            message = input()
-            message = [str(pow(ord(ch), self.e_s,self.n)) for ch in message]
-            message =  ' '.join(message)
-            self.s.send(message.encode())
+            try:
+                message = input()
+                encrypted = [str(pow(ord(ch), self.e_s, self.n_s)) for ch in message]
+                self.s.send(' '.join(encrypted).encode())
+            except Exception as e:
+                print("[client]: Error sending message:", e)
+                break
 
 if __name__ == "__main__":
     cl = Client("127.0.0.1", 9001, "b_g")
