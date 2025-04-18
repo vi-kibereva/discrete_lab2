@@ -3,9 +3,9 @@ import threading
 import sympy
 import random
 import math
+import hashlib
 
 class Server:
-
     def __init__(self, port: int) -> None:
         self.host = '127.0.0.1'
         self.port = port
@@ -13,7 +13,6 @@ class Server:
         self.username_lookup = {}
         self.public_keys = {}
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
         self.e, self.d, self.n = self.generate_rsa_keys()
 
     def generate_rsa_keys(self):
@@ -30,78 +29,78 @@ class Server:
     def start(self):
         self.s.bind((self.host, self.port))
         self.s.listen(100)
-
         print(f"[server]: Listening on {self.host}:{self.port}")
 
         while True:
-            c, addr = self.s.accept()
-            username = c.recv(1024).decode()
+            client_sock, addr = self.s.accept()
+            username = client_sock.recv(1024).decode()
             print(f"{username} tries to connect")
 
-            self.username_lookup[c] = username
-            self.clients.append(c)
+            self.username_lookup[client_sock] = username
+            self.clients.append(client_sock)
 
-            # send public key to the client
-            c.send(f"{self.e} {self.n}".encode())
+            client_sock.send(f"{self.e} {self.n}".encode())
 
-            # receive client's public key
-            client_key = c.recv(1024).decode()
-            e_c, n_c = map(int, client_key.split())
-            self.public_keys[c] = (e_c, n_c)
+            data = client_sock.recv(1024).decode()
+            e_c, n_c = map(int, data.split())
+            self.public_keys[client_sock] = (e_c, n_c)
 
             self.broadcast(f"new person has joined: {username}")
 
-            threading.Thread(target=self.handle_client, args=(c, addr)).start()
+            threading.Thread(target=self.handle_client,args=(client_sock,)).start()
 
     def broadcast(self, msg: str, sender=None):
-        for client in self.clients:
-            if client == sender:
+        hash_val = hashlib.sha256(msg.encode()).hexdigest()
+        for client in list(self.clients):
+            if client is sender:
                 continue
-
             try:
                 e_c, n_c = self.public_keys[client]
                 encrypted = [str(pow(ord(ch), e_c, n_c)) for ch in msg]
-                encrypted_msg = ' '.join(encrypted)
-                client.send(encrypted_msg.encode())
+                message = hash_val + '|' + ' '.join(encrypted)
+                client.send(message.encode())
             except Exception as e:
                 print(f"[server]: failed to send to {self.username_lookup.get(client, 'unknown')}: {e}")
                 self.disconnect(client)
 
-    def handle_client(self, c: socket.socket, addr):
+    def handle_client(self, client_sock):
         while True:
             try:
-                data = c.recv(4096).decode()
+                data = client_sock.recv(4096).decode()
                 if not data:
                     break
 
-                decrypted_chars = [
-                    chr(pow(int(part), self.d, self.n))
-                    for part in data.split()
-                ]
-                message = ''.join(decrypted_chars)
-                username = self.username_lookup.get(c, "???")
-                print(f"[{username}]: {message}")
+                hash_val, encrypted_payload = data.split('|', 1)
+                parts = encrypted_payload.split()
 
-                self.broadcast(f"{username}: {message}", sender=c)
+                decrypted = ''.join(chr(pow(int(num), self.d, self.n)) for num in parts)
 
+                if hashlib.sha256(decrypted.encode()).hexdigest() != hash_val:
+                    print("Message failed integrity check")
+                    continue
+
+                username = self.username_lookup.get(client_sock, "??")
+                print(f"[{username}]: {decrypted}")
+
+                self.broadcast(f"{username}: {decrypted}", sender=client_sock)
             except Exception as e:
                 print(f"[server]: error: {e}")
                 break
 
-        self.disconnect(c)
+        self.disconnect(client_sock)
 
-    def disconnect(self, client):
-        username = self.username_lookup.get(client, "unknown")
+    def disconnect(self, client_sock):
+        username = self.username_lookup.get(client_sock, "unknown")
         print(f"[server]: {username} disconnected")
-        if client in self.clients:
-            self.clients.remove(client)
-        self.username_lookup.pop(client, None)
-        self.public_keys.pop(client, None)
+        if client_sock in self.clients:
+            self.clients.remove(client_sock)
+        self.username_lookup.pop(client_sock, None)
+        self.public_keys.pop(client_sock, None)
         try:
-            client.close()
+            client_sock.close()
         except:
             pass
 
 if __name__ == "__main__":
-    s = Server(9001)
-    s.start()
+    server = Server(9001)
+    server.start()
